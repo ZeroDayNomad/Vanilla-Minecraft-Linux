@@ -1,0 +1,144 @@
+###############################
+# PDS-LLC Minecraft Installer #
+###############################
+---
+- name: Minecraft Server Installer Script
+  hosts: localhost
+  become: yes
+  become_user: mcserver
+  gather_facts: yes
+  vars:
+    users:
+    - username: mcserver
+      password:
+  vars_prompt:
+    - name: ansible_password
+      prompt: Enter password
+      unsafe: yes
+      private: yes
+  tasks:
+  - name: Check OS Release is AlmaLinux
+    assert:
+      that:
+      - ansible_facts['os_family'] == "RedHat"
+      - ansible_facts['distribution'] == "AlmaLinux"
+      fail_msg: Host {{ ansible_hostname }} does not meet minimal reps
+
+  - name: install elasticsearch rpm key
+    rpm_key:
+      key: https://artifacts.elastic.co/GPG-KEY-elasticsearch
+      state: present
+
+  - name: install elasticsearch 8.x rpm repository
+    yum_repository:
+      name: elasticsearch-8.x
+      description: Elasticsearch repository for 8.x packages
+      baseurl: https://artifacts.elastic.co/packages/8.x/yum
+      gpgcheck: true
+      gpgkey: https://artifacts.elastic.co/GPG-KEY-elasticsearch
+    become: true
+    become_user: root
+
+  - name: install java & elasticsearch 8.x
+    become: yes
+    become_user: root
+    yum:
+      name: "{{ item }}"
+      state: present
+      update_cache: true
+    loop:
+      - java-1.8.0-openjdk
+      - elasticsearch
+
+  - name: Create User mcserver with Home Directory
+    become: yes
+    become_user: root
+    user: 
+      name: "{{ item.username }}"
+      shell: /bin/bash
+      createhome: yes
+      group: wheel
+      generate_ssh_key: yes
+      ssh_key_bits: 2048
+      password: "{{ item.password }}"
+      update_password: always
+    with_items: "{{ users }}"
+
+  - name: Installing Screen
+    become: yes
+    become_user: root
+    yum:
+      name: screen
+      state: present
+
+  - name: Create Minecraft Directory
+    become: yes
+    become_user: root
+    file:
+      path: /home/mcserver/Desktop/minecraft
+      state: directory
+      mode: '0777'
+
+  - name: Download Latest Minecraft Server Jar
+    become: yes
+    become_user: root
+    get_url:
+      url: "https://launcher.mojang.com/v1/objects/f1a0073671057f01aa843443fef34330281333ce/server.jar"
+      dest: /home/mcserver/Desktop/minecraft
+      mode: '0440'
+
+  - name: Changing perm of jar file, adding "+x"
+    become: yes
+    become_user: root
+    file: dest=/home/mcserver/Desktop/minecraft/server.jar mode=+x
+
+  - name: Creating MC Launcher Bash Script
+    copy:
+      dest: /home/mcserver/Desktop/minecraft/launch.sh
+      content: |
+        #!/bin/sh
+        screen -dms minecraft java -Xmx1024M -Xms1024M -jar server.jar nogui
+
+  - name: Change perms for folder
+    become: yes
+    become_user: root
+    command: chmod 777 -R /home/mcserver/Desktop/minecraft
+
+  - name: Change perms for shell script
+    become: yes
+    become_user: root
+    command: chmod +x /home/mcserver/Desktop/minecraft/launch.sh
+
+  - name: Change perms for jar file
+    become: yes
+    become_user: root
+    command: chmod +x /home/mcserver/Desktop/minecraft/server.jar
+
+  - name: Trigger EULA
+    become: yes
+    become_user: mcserver
+    shell: ./launch.sh >> log.txt
+    args:
+      chdir: /home/mcserver/Desktop/minecraft/
+
+  - name: Change EULA to True
+    copy:
+      dest: /home/mcserver/Desktop/minecraft/eula.txt
+      content: |
+        eula=true
+
+  - name: "Verify EULA is True"
+    shell: |
+      cat /home/mcserver/Desktop/minecraft/eula.txt
+    register: file_content
+
+  - name: "Print EULA to Console"
+    debug:
+      msg: "{{ file_content.stdout }}"
+
+  - name: Start Minecraft
+    become: yes
+    become_user: mcserver
+    shell: ./launch.sh >> start.txt
+    args:
+      chdir: /home/mcserver/Desktop/minecraft/
